@@ -620,6 +620,7 @@ body.viewer #pledge{border-bottom-style:dotted;cursor:default}
           <option value="4">4 weeks</option>
           <option value="12" selected>12 weeks</option>
           <option value="26">26 weeks</option>
+          <option value="52">52 weeks</option>
         </select>
         <span id="hideNamesWrap"><label class="chk" data-tipkey="hidenames" data-tipself><input type="checkbox" id="hideNames"> Hide names when sharing</label></span>
         <button class="btn" id="shareImg" data-tipkey="shareimg" data-tipself>Share image</button>
@@ -702,9 +703,19 @@ body.viewer #pledge{border-bottom-style:dotted;cursor:default}
       </div>
       <div id="shareBox" hidden>
         <div class="kv">
-          <div class="f" style="flex:1 1 220px">
+          <div class="f" style="flex:1 1 200px">
             <label for="shareTitle">Title on the page</label>
             <input id="shareTitle" placeholder="e.g. Ravi&#39;s August" maxlength="60">
+          </div>
+          <div class="f">
+            <label for="shareRange" data-tipkey="sharerange">How far back</label>
+            <select id="shareRange">
+              <option value="1">This month only</option>
+              <option value="3">3 months</option>
+              <option value="6" selected>6 months</option>
+              <option value="12">12 months</option>
+              <option value="all">Everything</option>
+            </select>
           </div>
         </div>
         <div class="kv" style="margin-top:12px">
@@ -713,6 +724,7 @@ body.viewer #pledge{border-bottom-style:dotted;cursor:default}
           <button class="btn" id="shareOpen">Open</button>
           <button class="btn danger" id="shareNew" data-tipkey="newlink" data-tipself>New link</button>
         </div>
+        <p class="tiny" id="shareRangeNote"></p>
         <p class="tiny" id="shareNote"></p>
         <div id="shareRules" hidden>
           <p class="tiny" style="margin-bottom:6px">Add this alongside your existing rule, then Publish:</p>
@@ -906,7 +918,7 @@ const S = {
   habits: [],
   month: { pledge: 0, ratings: {}, donee: "", paid: "no" },
   cache: {}, who: "", lastUid: null, themePref: "auto",
-  readonly: false, viewMonths: [], share: { id: null, enabled: false, hideNames: false, title: "" },
+  readonly: false, viewMonths: [], allLoaded: false, share: { id: null, enabled: false, hideNames: false, title: "", range: 6 },
   wall: { span: 12, hideNames: false, scrolled: false },
   uid: null, db: null, auth: null, fb: null, cloud: false, ready: false
 };
@@ -1002,7 +1014,7 @@ async function initFirebase(cfg, fromPaste) {
         setStatus("Signed out", "");
         return;
       }
-      if (S.lastUid !== user.uid) { S.cache = {}; tried.clear(); S.lastUid = user.uid; }
+      if (S.lastUid !== user.uid) { S.cache = {}; tried.clear(); S.allLoaded = false; S.lastUid = user.uid; }
       S.uid = user.uid; S.cloud = true;
       S.who = user.email || user.displayName || shortUid();
       $("#signBtn").hidden = false;
@@ -1692,18 +1704,63 @@ function shareURL(id) {
 function queuePublish() {
   if (!S.share.enabled || !S.share.id || S.readonly) return;
   clearTimeout(pubTimer);
-  pubTimer = setTimeout(publishShare, 1800);
+  pubTimer = setTimeout(publishShare, S.share.range === "all" ? 5000 : 1800);
 }
 
+/* The months a share covers: the one you're viewing and the N-1 before it.
+   Fixed by the setting, not by whatever the session happened to load. */
+function shareMonthKeys() {
+  if (S.share.range === "all")
+    return [...new Set([S.ym, ...Object.keys(S.cache)])].filter(k => /^\d{4}-\d{2}$/.test(k)).sort();
+  const n = Math.max(1, Number(S.share.range) || 1);
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) out.push(shiftMonth(S.ym, -i));
+  return out;
+}
+
+/* A published document has to stay under Firestore's 1 MiB ceiling. Roughly
+   11 KB a month for ten habits, so this only bites after several years —
+   and when it does, the oldest months go first rather than the write failing. */
+const SHARE_LIMIT = 700000;      // bytes, under Firestore's 1 MiB document ceiling
+const SHARE_ENTRIES = 15000;     // Firestore indexes every key of a map twice and
+                                 // caps a document at 40,000 index entries, so the
+                                 // entry count bites long before the byte count does
+function countRatings(months) {
+  let n = 0;
+  for (const m of Object.values(months)) n += Object.keys(m.ratings || {}).length;
+  return n;
+}
+function trimToLimit(months) {
+  const keys = Object.keys(months).sort();
+  const out = { ...months };
+  let dropped = 0;
+  while (keys.length > 1 &&
+        (JSON.stringify(out).length > SHARE_LIMIT || countRatings(out) > SHARE_ENTRIES)) {
+    delete out[keys.shift()];
+    dropped++;
+  }
+  return { months: out, dropped };
+}
+
+/* Empty months are dropped: they would render as an unbroken run of
+   "not logged" squares, which is what a missing month looks like anyway. */
 function shareMonths() {
   const out = {};
-  const yms = [...new Set([S.ym, ...Object.keys(S.cache)])].sort().slice(-12);
-  for (const ym of yms) {
+  for (const ym of shareMonthKeys()) {
     const m = ym === S.ym ? S.month : S.cache[ym];
     if (!m) continue;
+    const has = Object.keys(m.ratings || {}).length > 0;
+    if (!has && !(Number(m.pledge) > 0)) continue;
     out[ym] = { pledge: Number(m.pledge) || 0, ratings: m.ratings || {} };
   }
   return out;
+}
+
+function rangeLabel() {
+  if (S.share.range === "all") return "everything you've recorded";
+  const keys = shareMonthKeys();
+  const a = monthLabel(keys[0]), b = monthLabel(keys[keys.length - 1]);
+  return keys.length === 1 ? b : `${a} to ${b}`;
 }
 
 function sharePayload() {
@@ -1729,10 +1786,21 @@ function sharePayload() {
 
 async function publishShare() {
   if (!S.cloud || !S.share.enabled || !S.share.id || S.readonly) return;
+  try {
+    if (S.share.range === "all") await loadAllMonths();
+    else await loadMonths(shareMonthKeys());
+  } catch (e) { return shareFailed(e); }
   const payload = sharePayload();
+  const trimmed = trimToLimit(payload.months);
+  payload.months = trimmed.months;
+  const n = Object.keys(payload.months).length;
   try {
     await S.fb.setDoc(S.fb.doc(S.db, "shares", S.share.id), payload);
-    shareNote("Live. The page updates whenever you rate something.", "");
+    const span = Object.keys(payload.months).sort();
+    shareNote(`Live — ${n} month${n === 1 ? "" : "s"} of data` +
+      (n ? ` (${monthLabel(span[0])} to ${monthLabel(span[span.length - 1])})` : "") +
+      (trimmed.dropped ? `. The ${trimmed.dropped} oldest month${trimmed.dropped === 1 ? " was" : "s were"} left out to keep the page under Firestore's size limit` : "") +
+      ". The page updates whenever you rate something.", "");
     setStatus("Shared page updated · " + shortUid(), "on");
   } catch (e) { shareFailed(e); }
 }
@@ -1767,7 +1835,11 @@ function renderShare() {
   $("#shareOn").checked = on;
   $("#shareHide").checked = !!S.share.hideNames;
   if (document.activeElement !== $("#shareTitle")) $("#shareTitle").value = S.share.title || "";
+  $("#shareRange").value = S.share.range === "all" ? "all" : String(S.share.range || 6);
   $("#shareBox").hidden = !on;
+  $("#shareRangeNote").textContent = S.share.range === "all"
+    ? "Covers every month you've recorded. Months with nothing in them are left out."
+    : `Covers ${rangeLabel()}. Months with nothing in them are left out.`;
   if (on && S.share.id) $("#shareLink").value = shareURL(S.share.id);
 }
 
@@ -1777,7 +1849,10 @@ async function toggleShare(on) {
   renderShare();
   queueSavePrefs();
   if (on) { $("#shareRules").hidden = true; shareNote("Publishing…", ""); await publishShare(); }
-  else { await unpublishShare(); shareNote("The link is dead. Turning this back on republishes to the same address.", ""); }
+  else {
+    shareNote("The link is dead. Turning this back on republishes to the same address.", "");
+    unpublishShare();   // if you're offline the delete flushes when you reconnect
+  }
 }
 
 async function rotateShare() {
@@ -1801,6 +1876,12 @@ function bindShare() {
     S.share.title = e.target.value;
     queueSavePrefs();
     queuePublish();
+  });
+  $("#shareRange").addEventListener("change", e => {
+    S.share.range = e.target.value === "all" ? "all" : (Number(e.target.value) || 6);
+    renderShare();
+    queueSavePrefs();
+    publishShare();
   });
   $("#shareNew").addEventListener("click", rotateShare);
   renderShare();
@@ -1836,9 +1917,22 @@ async function initViewer(id) {
     const app = A.getApps().length ? A.getApp() : A.initializeApp(FIREBASE_CONFIG);
     S.db = F.getFirestore(app);
     S.fb = { ...F };
-    const snap = await F.getDoc(F.doc(S.db, "shares", id));
-    if (!snap.exists()) return viewerFail("That link doesn't point at a ledger any more. It may have been turned off.");
-    applyShare(snap.data());
+    /* a live listener, so a page left open follows the owner's ratings */
+    let seen = false;
+    F.onSnapshot(F.doc(S.db, "shares", id), snap => {
+      if (!snap.exists()) {
+        return seen
+          ? setStatus("The owner has stopped sharing this ledger", "err")
+          : viewerFail("That link doesn't point at a ledger any more. It may have been turned off.");
+      }
+      seen = true;
+      applyShare(snap.data());
+    }, e => {
+      if (seen) return setStatus("Lost connection — showing the last version", "busy");
+      if (e && e.code === "permission-denied")
+        return viewerFail("This ledger is published but the database won't hand it over. The owner needs to add the shares rule.");
+      viewerFail("Couldn't load that ledger. Check the link, or try again when you're online.");
+    });
   } catch (e) {
     if (e && e.code === "permission-denied")
       return viewerFail("This ledger is published but the database won't hand it over. The owner needs to add the shares rule.");
@@ -1855,6 +1949,8 @@ function viewerFail(msg) {
 }
 
 function applyShare(d) {
+  const keepYm = S.viewMonths.length ? S.ym : null;   // an update shouldn't yank the reader
+  const first = !S.viewMonths.length;
   S.share.hideNames = !!d.hideNames;
   S.habits = (d.habits || []).map((h, i) => ({
     id: h.id || "h" + i,
@@ -1867,11 +1963,22 @@ function applyShare(d) {
   for (const [ym, m] of Object.entries(d.months || {}))
     S.cache[ym] = { pledge: Number(m.pledge) || 0, ratings: m.ratings || {}, donee: "", paid: "no" };
   S.viewMonths = Object.keys(S.cache).sort();
-  S.ym = (d.current && S.cache[d.current]) ? d.current : (S.viewMonths[S.viewMonths.length - 1] || S.ym);
+  S.ym = (keepYm && S.cache[keepYm]) ? keepYm
+       : ((d.current && S.cache[d.current]) ? d.current : (S.viewMonths[S.viewMonths.length - 1] || S.ym));
   S.month = S.cache[S.ym] || { pledge: 0, ratings: {}, donee: "", paid: "no" };
   $("#pledge").readOnly = true;
   $("#viewerTag").hidden = false;
   $("#viewerTitle").textContent = d.title ? d.title : "A shared ledger";
+  /* a 26-week wall over two months of data would just be a field of blanks */
+  const M = S.viewMonths.length;
+  const sel = $("#wallSpan");
+  if (sel && first) {
+    [...sel.options].forEach(o => {
+      o.hidden = (o.value === "12" && M < 3) || (o.value === "26" && M < 6) || (o.value === "52" && M < 12);
+    });
+    S.wall.span = M >= 3 ? 12 : 4;
+    sel.value = String(S.wall.span);
+  }
   const when = d.updatedAt ? new Date(d.updatedAt) : null;
   setStatus(when ? "Read-only · updated " + when.toLocaleDateString("en-IN",
     { day: "numeric", month: "short" }) : "Read-only", "on");
@@ -1949,6 +2056,7 @@ const TIP = {
   weekchip: "This week's slice of the pledge and how much of it you kept. Short weeks at the start and end of the month carry proportionally less money.",
   habits: "Habits carry over month to month. Weights and goals apply to whichever month you're viewing.",
   sharepage: "A read-only page anyone with the link can open — no account needed. It carries the pledge, the streak wall and the ledger, and nothing else.",
+  sharerange: "How many months travel with the link: the month you're viewing plus the ones before it. Everything publishes your whole history, which readers can page through month by month.",
   newlink: "Moves the page to a fresh address and deletes the old one. Use it if a link went somewhere you didn't intend.",
   theme: "Light, dark, or follow whatever your phone or laptop is set to. The choice is saved to your account, so it follows you between devices.",
   install_app: "Adds Ledger to your home screen. It opens without browser chrome and keeps working offline — ratings you make with no signal sync when you're back.",
@@ -2255,11 +2363,8 @@ function streakOf(h, days, today) {
   return { cur, best };
 }
 
-async function loadRange(days) {
-  if (!S.cloud) return;
-  const yms = [...new Set(days.map(ymOf))].filter(y => y !== S.ym && !S.cache[y] && !tried.has(y));
-  if (!yms.length) return;
-  yms.forEach(y => tried.add(y));
+async function fetchMonths(yms) {
+  if (!S.cloud || !yms.length) return;
   await Promise.all(yms.map(async y => {
     try {
       const s = await S.fb.getDoc(S.fb.doc(S.db, "users", S.uid, "months", y));
@@ -2267,7 +2372,35 @@ async function loadRange(days) {
       S.cache[y] = { pledge: Number(d.pledge) || 0, ratings: d.ratings || {}, donee: d.donee || "", paid: d.paid || "no" };
     } catch { S.cache[y] = { pledge: 0, ratings: {}, donee: "", paid: "no" }; }
   }));
+}
+
+async function loadRange(days) {
+  if (!S.cloud) return;
+  const yms = [...new Set(days.map(ymOf))].filter(y => y !== S.ym && !S.cache[y] && !tried.has(y));
+  if (!yms.length) return;
+  yms.forEach(y => tried.add(y));
+  await fetchMonths(yms);
   render();
+}
+
+async function loadMonths(yms) {
+  return fetchMonths(yms.filter(y => y !== S.ym && !S.cache[y]));
+}
+
+/* One collection read instead of guessing month names. Cached for the
+   session so a burst of edits doesn't re-read the archive each time. */
+async function loadAllMonths() {
+  if (!S.cloud || S.allLoaded) return;
+  const snap = await S.fb.getDocs(S.fb.collection(S.db, "users", S.uid, "months"));
+  snap.forEach(doc => {
+    if (doc.id === S.ym || !/^\d{4}-\d{2}$/.test(doc.id)) return;
+    const d = doc.data() || {};
+    S.cache[doc.id] = {
+      pledge: Number(d.pledge) || 0, ratings: d.ratings || {},
+      donee: d.donee || "", paid: d.paid || "no"
+    };
+  });
+  S.allLoaded = true;
 }
 
 function cellClass(h, d, today) {
@@ -2278,13 +2411,19 @@ function cellClass(h, d, today) {
   return d > today ? "wfut" : "wun";
 }
 
+function cellSize(span) {
+  if (span <= 4) return { cs: 20, gap: 2 };
+  if (span <= 12) return { cs: 13, gap: 2 };
+  if (span <= 26) return { cs: 8, gap: 1 };
+  return { cs: 6, gap: 1 };
+}
+
 function renderWall() {
   const host = $("#wallScroll");
   if (!S.habits.length) { host.innerHTML = `<div class="empty tiny">Your wall fills in once you add a habit.</div>`; $("#wallLegend").innerHTML = ""; return; }
   const span = S.wall.span;
   const { days } = wallWindow(span);
-  const cs = span <= 4 ? 20 : span <= 12 ? 13 : 8;
-  const gap = span >= 26 ? 1 : 2;
+  const { cs, gap } = cellSize(span);
   const today = midnight(new Date());
   const cols = `grid-template-columns:repeat(${days.length},${cs}px);gap:${gap}px`;
 
@@ -2334,8 +2473,7 @@ async function wallPNG() {
   const m = evalMonth(S.habits, S.month.ratings, S.ym, Number(S.month.pledge) || 0);
   const today = midnight(new Date());
   const hide = S.wall.hideNames;
-  const cs = span <= 4 ? 20 : span <= 12 ? 13 : 8;
-  const gap = span >= 26 ? 1 : 2;
+  const { cs, gap } = cellSize(span);
   const L = 148, R = 84, P = 28, HEAD = 108, ROW = cs + gap + 5, FOOT = 52;
   const W = P * 2 + L + days.length * (cs + gap) + R;
   const H = HEAD + Math.max(1, S.habits.length) * ROW + FOOT;
