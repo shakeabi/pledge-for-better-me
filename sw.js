@@ -1,7 +1,7 @@
 /* Pledge Ledger service worker.
    Shell is cached so the app opens offline; Firebase traffic is never cached,
    because Firestore keeps its own offline store in IndexedDB. */
-const VERSION = "pledge-ledger-v1";
+const VERSION = "pledge-ledger-v2";
 const SHELL = VERSION + "-shell";
 const RUNTIME = VERSION + "-runtime";
 
@@ -62,7 +62,10 @@ self.addEventListener("fetch", e => {
   if (req.mode === "navigate") {
     e.respondWith((async () => {
       try {
-        const fresh = await fetch(req);
+        /* revalidate with the server rather than trusting the browser's HTTP
+           cache, or a host that sets max-age on HTML will keep serving the old
+           page for minutes after a deploy */
+        const fresh = await fetch(req.url, { cache: "no-cache", credentials: "same-origin" });
         const c = await caches.open(SHELL);
         c.put("./index.html", fresh.clone());
         return fresh;
