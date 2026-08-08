@@ -6,8 +6,8 @@
 <meta name="description" content="Habit tracker with money on the line: pledge an amount, earn it back day by day, donate what you don't.">
 <meta name="theme-color" id="themeColor" content="#eff2ee">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icon-192.png" type="image/png">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon.png" type="image/png">
+<link rel="apple-touch-icon" href="icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Ledger">
@@ -530,6 +530,34 @@ button,select,input,summary{touch-action:manipulation}
 }
 @media (display-mode:standalone){.masthead{padding-top:2px}}
 
+
+/* ---------- shared, read-only view ---------- */
+body.viewer #todayPanel,body.viewer #habitsPanel,body.viewer #settlePanel,
+body.viewer #explainPanel,body.viewer #sharePanel,body.viewer #setupPanel,
+body.viewer #thisM,body.viewer #exportBtn,body.viewer #importBtn,
+body.viewer #signBtn,body.viewer #installBtn,body.viewer #hideNamesWrap{display:none}
+body.viewer #ownBtn{display:inline-block}
+body.viewer .stamp{pointer-events:none;cursor:default}
+body.viewer #pledge{border-bottom-style:dotted;cursor:default}
+#ownBtn{display:none;text-decoration:none}
+#viewerTag{
+  display:inline-flex;align-items:baseline;gap:8px;font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+  border-left:3px solid var(--kept);padding-left:9px;
+}
+#viewerTag b{font-family:var(--body);font-size:13px;letter-spacing:0;text-transform:none;
+  font-weight:500;color:var(--ink)}
+.chk{
+  font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-2);display:inline-flex;align-items:center;gap:7px;cursor:pointer;
+}
+.chk input{margin:0}
+#shareLink{
+  flex:1 1 260px;font-family:var(--mono);font-size:12px;color:var(--ink-2);
+  overflow:hidden;text-overflow:ellipsis;
+}
+#shareBox{margin-top:16px;border-top:1px solid var(--rule-2);padding-top:16px}
+
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
@@ -559,6 +587,7 @@ button,select,input,summary{touch-action:manipulation}
       <button class="btn" id="themeBtn" data-tipkey="theme" data-tipself>
         <span class="glyph" id="themeGlyph">◐</span><span id="themeName">Auto</span></button>
       <span id="whoami"></span>
+      <span id="viewerTag" hidden>Shared &middot; read-only <b id="viewerTitle"></b></span>
     </div>
   </header>
 
@@ -592,7 +621,7 @@ button,select,input,summary{touch-action:manipulation}
           <option value="12" selected>12 weeks</option>
           <option value="26">26 weeks</option>
         </select>
-        <label class="chk" data-tipkey="hidenames" data-tipself><input type="checkbox" id="hideNames"> Hide names when sharing</label>
+        <span id="hideNamesWrap"><label class="chk" data-tipkey="hidenames" data-tipself><input type="checkbox" id="hideNames"> Hide names when sharing</label></span>
         <button class="btn" id="shareImg" data-tipkey="shareimg" data-tipself>Share image</button>
         <button class="btn ghost" id="copyText" data-tipkey="copytext" data-tipself>Copy as text</button>
       </div>
@@ -636,7 +665,7 @@ button,select,input,summary{touch-action:manipulation}
     </div>
   </details>
 
-  <section class="panel">
+  <section class="panel" id="settlePanel">
     <div class="panel-head">
       <h2 data-tipkey="settle">Settlement</h2>
       <span class="eyebrow">If the month ended with today's ratings</span>
@@ -656,7 +685,52 @@ button,select,input,summary{touch-action:manipulation}
     </div>
   </section>
 
-  <details class="panel">
+  <details class="panel" id="sharePanel">
+    <summary>
+      <h2 data-tipkey="sharepage">Share this ledger</h2>
+      <span class="chev eyebrow">Read-only link</span>
+    </summary>
+    <div class="panel-body">
+      <p class="tiny" style="margin-top:0;max-width:70ch">
+        Publishes a read-only copy of the pledge, the streak wall and the ledger at a private
+        address. No sign-in needed to view it, and nothing else — settlement, donation notes,
+        your habit settings — goes with it. Turning it off deletes the page.
+      </p>
+      <div class="kv" style="gap:18px">
+        <label class="chk"><input type="checkbox" id="shareOn"> Publish a read-only page</label>
+        <label class="chk"><input type="checkbox" id="shareHide"> Hide habit names</label>
+      </div>
+      <div id="shareBox" hidden>
+        <div class="kv">
+          <div class="f" style="flex:1 1 220px">
+            <label for="shareTitle">Title on the page</label>
+            <input id="shareTitle" placeholder="e.g. Ravi&#39;s August" maxlength="60">
+          </div>
+        </div>
+        <div class="kv" style="margin-top:12px">
+          <input id="shareLink" readonly aria-label="Share link">
+          <button class="btn solid" id="shareCopy">Copy link</button>
+          <button class="btn" id="shareOpen">Open</button>
+          <button class="btn danger" id="shareNew" data-tipkey="newlink" data-tipself>New link</button>
+        </div>
+        <p class="tiny" id="shareNote"></p>
+        <div id="shareRules" hidden>
+          <p class="tiny" style="margin-bottom:6px">Add this alongside your existing rule, then Publish:</p>
+          <pre class="code">match /shares/{shareId} {
+  allow read: if true;
+  allow create: if request.auth != null
+                &amp;&amp; request.auth.uid == request.resource.data.owner;
+  allow update: if request.auth != null
+                &amp;&amp; request.auth.uid == resource.data.owner;
+  allow delete: if request.auth != null
+                &amp;&amp; request.auth.uid == resource.data.owner;
+}</pre>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <details class="panel" id="explainPanel">
     <summary>
       <h2>How the money is counted</h2>
       <span class="chev eyebrow">Play with it</span>
@@ -686,6 +760,7 @@ button,select,input,summary{touch-action:manipulation}
   <span class="kv" style="margin:0">
     <button id="exportBtn" data-tipkey="export" data-tipself>Export JSON</button>
     <button id="importBtn" data-tipkey="import" data-tipself>Import</button>
+    <a id="ownBtn" class="btn ghost" href="./">Make your own</a>
     <button id="installBtn" data-tipkey="install_app" data-tipself hidden>Install</button>
     <button id="signBtn" data-tipkey="signout" data-tipself hidden>Sign out</button>
   </span>
@@ -831,6 +906,7 @@ const S = {
   habits: [],
   month: { pledge: 0, ratings: {}, donee: "", paid: "no" },
   cache: {}, who: "", lastUid: null, themePref: "auto",
+  readonly: false, viewMonths: [], share: { id: null, enabled: false, hideNames: false, title: "" },
   wall: { span: 12, hideNames: false, scrolled: false },
   uid: null, db: null, auth: null, fb: null, cloud: false, ready: false
 };
@@ -854,12 +930,12 @@ async function savePrefs() {
   if (!S.cloud) return;
   try {
     await S.fb.setDoc(S.fb.doc(S.db, "users", S.uid, "data", "prefs"),
-      { theme: S.themePref, updatedAt: Date.now() }, { merge: true });
+      { theme: S.themePref, share: S.share, updatedAt: Date.now() }, { merge: true });
   } catch {}
 }
 
-function queueSaveHabits() { clearTimeout(habitTimer); habitTimer = setTimeout(saveHabits, 600); render(); }
-function queueSaveMonth()  { S.cache[S.ym] = S.month; clearTimeout(monthTimer); monthTimer = setTimeout(saveMonth, 600); render(); }
+function queueSaveHabits() { clearTimeout(habitTimer); habitTimer = setTimeout(saveHabits, 600); queuePublish(); render(); }
+function queueSaveMonth()  { S.cache[S.ym] = S.month; clearTimeout(monthTimer); monthTimer = setTimeout(saveMonth, 600); queuePublish(); render(); }
 
 async function saveHabits() {
   if (!S.cloud) return;
@@ -1036,8 +1112,20 @@ function setupHTML() {
   <pre class="code">rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
     match /users/{uid}/{doc=**} {
       allow read, write: if request.auth != null &amp;&amp; request.auth.uid == uid;
+    }
+
+    // Only needed if you publish read-only pages.
+    match /shares/{shareId} {
+      allow read: if true;
+      allow create: if request.auth != null
+                    &amp;&amp; request.auth.uid == request.resource.data.owner;
+      allow update: if request.auth != null
+                    &amp;&amp; request.auth.uid == resource.data.owner;
+      allow delete: if request.auth != null
+                    &amp;&amp; request.auth.uid == resource.data.owner;
     }
   }
 }</pre>
@@ -1072,8 +1160,9 @@ function attach() {
   }, e => setStatus("Read failed: " + e.code, "err"));
 
   unsubPrefs = onSnapshot(doc(S.db, "users", S.uid, "data", "prefs"), snap => {
-    const t = snap.data() && snap.data().theme;
-    if (t && THEMES[t] && t !== S.themePref) { S.themePref = t; applyTheme(); }
+    const d = snap.data() || {};
+    if (d.theme && THEMES[d.theme] && d.theme !== S.themePref) { S.themePref = d.theme; applyTheme(); }
+    if (d.share) { S.share = { ...S.share, ...d.share }; renderShare(); }
   }, () => {});
 
   unsubMonth = onSnapshot(doc(S.db, "users", S.uid, "months", S.ym), snap => {
@@ -1091,7 +1180,23 @@ function attach() {
   }, e => setStatus("Read failed: " + e.code, "err"));
 }
 
+function stepMonth(d) {
+  if (S.readonly) {
+    const i = S.viewMonths.indexOf(S.ym);
+    const next = S.viewMonths[i + d];
+    if (next) switchMonth(next);
+    return;
+  }
+  switchMonth(shiftMonth(S.ym, d));
+}
+
 async function switchMonth(ym) {
+  if (S.readonly) {
+    if (!S.cache[ym]) return;
+    S.ym = ym; S.month = S.cache[ym];
+    render();
+    return;
+  }
   S.cache[S.ym] = S.month;                       // remember the month we're leaving
   S.ym = ym;
   S.month = S.cache[ym] || { pledge: S.month.pledge || 0, ratings: {}, donee: "", paid: "no" };
@@ -1367,6 +1472,7 @@ function renderSettle(m) {
 let pop = null;
 function closePop() { if (pop) { pop.remove(); pop = null; } }
 function openPop(anchor) {
+  if (S.readonly) return;
   closePop();
   const habit = anchor.dataset.habit, date = anchor.dataset.date;
   const cur = S.month.ratings[`${habit}|${date}`];
@@ -1394,6 +1500,7 @@ function openPop(anchor) {
 }
 
 function setRating(habit, date, v) {
+  if (S.readonly) return;
   const key = `${habit}|${date}`;
   if (v === "" || v == null) delete S.month.ratings[key];
   else S.month.ratings[key] = v === "x" ? "x" : Number(v);
@@ -1564,6 +1671,213 @@ function bindReorder() {
   });
 }
 
+/* ======================= sharing ======================= */
+/* A published page is a snapshot copied into a public `shares` document, so
+   nobody ever needs read access to your private data. It refreshes whenever
+   you change something, and deleting it kills the link. */
+
+const SHARE_ALPHABET = "abcdefghijkmnopqrstuvwxyz23456789";
+let pubTimer = null;
+
+function newShareId() {
+  const a = new Uint8Array(14);
+  (crypto || window.crypto).getRandomValues(a);
+  return [...a].map(b => SHARE_ALPHABET[b % SHARE_ALPHABET.length]).join("");
+}
+
+function shareURL(id) {
+  return location.origin + location.pathname + "#s=" + id;
+}
+
+function queuePublish() {
+  if (!S.share.enabled || !S.share.id || S.readonly) return;
+  clearTimeout(pubTimer);
+  pubTimer = setTimeout(publishShare, 1800);
+}
+
+function shareMonths() {
+  const out = {};
+  const yms = [...new Set([S.ym, ...Object.keys(S.cache)])].sort().slice(-12);
+  for (const ym of yms) {
+    const m = ym === S.ym ? S.month : S.cache[ym];
+    if (!m) continue;
+    out[ym] = { pledge: Number(m.pledge) || 0, ratings: m.ratings || {} };
+  }
+  return out;
+}
+
+function sharePayload() {
+  const hide = !!S.share.hideNames;
+  return {
+    owner: S.uid,
+    title: (S.share.title || "").slice(0, 60),
+    hideNames: hide,
+    current: S.ym,
+    /* when names are hidden they are left out of the document entirely,
+       not merely hidden in the page */
+    habits: S.habits.map(h => ({
+      id: h.id,
+      name: hide ? null : (h.name || ""),
+      weight: Number(h.weight) || 0,
+      goal: Number(h.goal) || 1,
+      days: h.days || []
+    })),
+    months: shareMonths(),
+    updatedAt: Date.now()
+  };
+}
+
+async function publishShare() {
+  if (!S.cloud || !S.share.enabled || !S.share.id || S.readonly) return;
+  const payload = sharePayload();
+  try {
+    await S.fb.setDoc(S.fb.doc(S.db, "shares", S.share.id), payload);
+    shareNote("Live. The page updates whenever you rate something.", "");
+    setStatus("Shared page updated · " + shortUid(), "on");
+  } catch (e) { shareFailed(e); }
+}
+
+async function unpublishShare() {
+  if (!S.cloud || !S.share.id) return;
+  try { await S.fb.deleteDoc(S.fb.doc(S.db, "shares", S.share.id)); }
+  catch (e) { shareFailed(e); }
+}
+
+function shareFailed(e) {
+  const c = (e && e.code) || "";
+  if (c === "permission-denied") {
+    shareNote("Firestore is refusing to publish, which means the rules don't cover the shares " +
+      "collection yet. Open Firebase console → Firestore → Rules and add the block below, then Publish.", "err");
+    $("#shareRules").hidden = false;
+  } else {
+    shareNote("Couldn't publish" + (c ? " (" + c + ")" : "") + ".", "err");
+  }
+  setStatus("Publish failed", "err");
+}
+
+function shareNote(msg, kind) {
+  const n = $("#shareNote");
+  if (!n) return;
+  n.textContent = msg;
+  n.className = kind === "err" ? "gerr" : "tiny";
+}
+
+function renderShare() {
+  const on = !!S.share.enabled;
+  $("#shareOn").checked = on;
+  $("#shareHide").checked = !!S.share.hideNames;
+  if (document.activeElement !== $("#shareTitle")) $("#shareTitle").value = S.share.title || "";
+  $("#shareBox").hidden = !on;
+  if (on && S.share.id) $("#shareLink").value = shareURL(S.share.id);
+}
+
+async function toggleShare(on) {
+  S.share.enabled = on;
+  if (on && !S.share.id) S.share.id = newShareId();
+  renderShare();
+  queueSavePrefs();
+  if (on) { $("#shareRules").hidden = true; shareNote("Publishing…", ""); await publishShare(); }
+  else { await unpublishShare(); shareNote("The link is dead. Turning this back on republishes to the same address.", ""); }
+}
+
+async function rotateShare() {
+  const old = S.share.id;
+  S.share.id = newShareId();
+  renderShare();
+  queueSavePrefs();
+  if (old) { try { await S.fb.deleteDoc(S.fb.doc(S.db, "shares", old)); } catch {} }
+  await publishShare();
+  shareNote("New address. Anyone holding the old link now gets nothing.", "");
+}
+
+function bindShare() {
+  $("#shareOn").addEventListener("change", e => toggleShare(e.target.checked));
+  $("#shareHide").addEventListener("change", e => {
+    S.share.hideNames = e.target.checked;
+    queueSavePrefs();
+    publishShare();
+  });
+  $("#shareTitle").addEventListener("input", e => {
+    S.share.title = e.target.value;
+    queueSavePrefs();
+    queuePublish();
+  });
+  $("#shareNew").addEventListener("click", rotateShare);
+  renderShare();
+  $("#shareOpen").addEventListener("click", () => {
+    if (S.share.id) window.open(shareURL(S.share.id), "_blank", "noopener");
+  });
+  $("#shareCopy").addEventListener("click", async () => {
+    if (!S.share.id) return;
+    const url = shareURL(S.share.id);
+    try { await navigator.clipboard.writeText(url); setStatus("Link copied", "on"); }
+    catch {
+      const b = $("#shareLink"); b.select(); document.execCommand("copy");
+      setStatus("Link copied", "on");
+    }
+  });
+}
+
+/* ======================= read-only viewer ======================= */
+async function initViewer(id) {
+  document.body.classList.add("viewer");
+  S.readonly = true;
+  hideGate();
+  setStatus("Opening shared ledger…", "busy");
+  if (!FIREBASE_CONFIG || !FIREBASE_CONFIG.projectId) {
+    return viewerFail("This copy of the app isn't connected to a database, so it can't open shared links.");
+  }
+  try {
+    const V = "10.12.2", base = "https://www.gstatic.com/firebasejs/" + V + "/";
+    const [A, F] = await Promise.all([
+      import(base + "firebase-app.js"),
+      import(base + "firebase-firestore.js")
+    ]);
+    const app = A.getApps().length ? A.getApp() : A.initializeApp(FIREBASE_CONFIG);
+    S.db = F.getFirestore(app);
+    S.fb = { ...F };
+    const snap = await F.getDoc(F.doc(S.db, "shares", id));
+    if (!snap.exists()) return viewerFail("That link doesn't point at a ledger any more. It may have been turned off.");
+    applyShare(snap.data());
+  } catch (e) {
+    if (e && e.code === "permission-denied")
+      return viewerFail("This ledger is published but the database won't hand it over. The owner needs to add the shares rule.");
+    viewerFail("Couldn't load that ledger. Check the link, or try again when you're online.");
+  }
+}
+
+function viewerFail(msg) {
+  document.body.classList.remove("viewer");
+  document.body.classList.add("gated");
+  $("#gateBody").innerHTML = `<p class="gp">${esc(msg)}</p>
+    <a class="gbtn" href="./" style="text-decoration:none"><span class="gmark">L</span>Open your own ledger</a>`;
+  setStatus("Nothing to show", "err");
+}
+
+function applyShare(d) {
+  S.share.hideNames = !!d.hideNames;
+  S.habits = (d.habits || []).map((h, i) => ({
+    id: h.id || "h" + i,
+    name: h.name || "Habit " + (i + 1),
+    weight: Number(h.weight) || 0,
+    goal: Number(h.goal) || 1,
+    days: Array.isArray(h.days) ? h.days : []
+  }));
+  S.cache = {};
+  for (const [ym, m] of Object.entries(d.months || {}))
+    S.cache[ym] = { pledge: Number(m.pledge) || 0, ratings: m.ratings || {}, donee: "", paid: "no" };
+  S.viewMonths = Object.keys(S.cache).sort();
+  S.ym = (d.current && S.cache[d.current]) ? d.current : (S.viewMonths[S.viewMonths.length - 1] || S.ym);
+  S.month = S.cache[S.ym] || { pledge: 0, ratings: {}, donee: "", paid: "no" };
+  $("#pledge").readOnly = true;
+  $("#viewerTag").hidden = false;
+  $("#viewerTitle").textContent = d.title ? d.title : "A shared ledger";
+  const when = d.updatedAt ? new Date(d.updatedAt) : null;
+  setStatus(when ? "Read-only · updated " + when.toLocaleDateString("en-IN",
+    { day: "numeric", month: "short" }) : "Read-only", "on");
+  render();
+}
+
 /* ======================= theme ======================= */
 const MQ = window.matchMedia("(prefers-color-scheme: dark)");
 const THEMES = { auto: ["\u25d0", "Auto"], light: ["\u25cb", "Light"], dark: ["\u25cf", "Dark"] };
@@ -1634,6 +1948,8 @@ const TIP = {
   keptcol: "What this habit has earned back so far, out of its share of the pledge.",
   weekchip: "This week's slice of the pledge and how much of it you kept. Short weeks at the start and end of the month carry proportionally less money.",
   habits: "Habits carry over month to month. Weights and goals apply to whichever month you're viewing.",
+  sharepage: "A read-only page anyone with the link can open — no account needed. It carries the pledge, the streak wall and the ledger, and nothing else.",
+  newlink: "Moves the page to a fresh address and deletes the old one. Use it if a link went somewhere you didn't intend.",
   theme: "Light, dark, or follow whatever your phone or laptop is set to. The choice is saved to your account, so it follows you between devices.",
   install_app: "Adds Ledger to your home screen. It opens without browser chrome and keeps working offline — ratings you make with no signal sync when you're back.",
   reorder: "Drag to move this habit. The ledger, the streak wall and the settlement table all follow this order. On a keyboard, focus the handle and use the up and down arrows.",
@@ -1769,8 +2085,8 @@ function bind() {
   });
   $("#donee").addEventListener("input", e => { S.month.donee = e.target.value; queueSaveMonth(); });
   $("#donePaid").addEventListener("change", e => { S.month.paid = e.target.value; queueSaveMonth(); });
-  $("#prevM").addEventListener("click", () => switchMonth(shiftMonth(S.ym, -1)));
-  $("#nextM").addEventListener("click", () => switchMonth(shiftMonth(S.ym, 1)));
+  $("#prevM").addEventListener("click", () => stepMonth(-1));
+  $("#nextM").addEventListener("click", () => stepMonth(1));
   $("#thisM").addEventListener("click", () => switchMonth(ymOf(new Date())));
   $("#signBtn").addEventListener("click", signOutAction);
   $("#gateBody").addEventListener("click", e => { if (e.target.closest("#gGoogle")) googleSignIn(); });
@@ -2172,10 +2488,13 @@ bindTips();
 bind();
 bindWall();
 bindReorder();
+bindShare();
 syncSetupPanel();
 renderSandbox();
 render();
-initFirebase(FIREBASE_CONFIG);
+const shareMatch = /[#&?]s=([A-Za-z0-9_-]{6,64})/.exec(location.hash + "&" + location.search);
+if (shareMatch) initViewer(shareMatch[1]);
+else initFirebase(FIREBASE_CONFIG);
 
 </script>
 </body>
